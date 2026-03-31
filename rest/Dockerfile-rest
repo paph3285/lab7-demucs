@@ -1,0 +1,11 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir flask redis minio requests jsonpickle
+
+COPY rest/rest-server.py /app/rest-server.py
+
+EXPOSE 5001
+
+CMD ["python3", "/app/rest-server.py"]
