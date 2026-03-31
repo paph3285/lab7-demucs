@@ -1,7 +1,9 @@
 import os
 import json
+import shutil
 import subprocess
 import redis
+import platform
 from minio import Minio
 
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
@@ -20,7 +22,29 @@ minio_client = Minio(
     secure=False
 )
 
+def log_info(message):
+    try:
+        redis_client.lpush("logging", f"{platform.node()}.worker.info:{message}")
+    except Exception as e:
+        print(f"Logging failed: {e}")
+
+def log_debug(message):
+    try:
+        redis_client.lpush("logging", f"{platform.node()}.worker.debug:{message}")
+    except Exception as e:
+        print(f"Logging failed: {e}")
+
+RUNTIME_DIR = os.path.abspath("worker_runtime")
+INPUT_DIR = os.path.join(RUNTIME_DIR, "input")
+OUTPUT_DIR = os.path.join(RUNTIME_DIR, "output")
+MODELS_DIR = os.path.join(RUNTIME_DIR, "models")
+
+os.makedirs(INPUT_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(MODELS_DIR, exist_ok=True)
+
 print(f"Worker listening on Redis at {REDIS_HOST}:{REDIS_PORT}")
+log_info("Worker started")
 
 while True:
     item = redis_client.blpop("toWorker", timeout=0)
@@ -31,43 +55,42 @@ while True:
     print(f"\nReceived job from {queue_name}")
     print(payload)
 
+    songhash = "unknown"
+
     try:
         job = json.loads(payload)
         songhash = job["songhash"]
         bucket = job["bucket"]
         object_name = job["object_name"]
+        model = job.get("model", "mdx_extra_q")
 
-        base_dir = os.path.abspath("worker_runtime")
-        input_dir = os.path.join(base_dir, "input")
-        output_dir = os.path.join(base_dir, "output")
-        models_dir = os.path.join(base_dir, "models")
+        log_info(f"Received job {songhash}")
+        log_debug(f"Downloading {bucket}/{object_name}")
 
-        os.makedirs(input_dir, exist_ok=True)
-        os.makedirs(output_dir, exist_ok=True)
-        os.makedirs(models_dir, exist_ok=True)
+        local_mp3_path = os.path.join(INPUT_DIR, f"{songhash}.mp3")
 
-        local_input_path = os.path.join(input_dir, object_name)
+        print(f"Downloading {bucket}/{object_name} -> {local_mp3_path}")
+        minio_client.fget_object(bucket, object_name, local_mp3_path)
+        print(f"Downloaded successfully: {local_mp3_path}")
 
-        print(f"Downloading {bucket}/{object_name} -> {local_input_path}")
-        minio_client.fget_object(bucket, object_name, local_input_path)
-        print(f"Downloaded successfully: {local_input_path}")
+        log_info(f"Running Demucs for {songhash}")
+        print("Running Demucs...")
 
-        cmd = [
+        command = [
             "docker", "run", "--rm",
             "--platform", "linux/amd64",
-            "--entrypoint", "python3",
-            "-v", f"{input_dir}:/data/input",
-            "-v", f"{output_dir}:/data/output",
-            "-v", f"{models_dir}:/data/models",
+            "-v", f"{INPUT_DIR}:/data/input",
+            "-v", f"{OUTPUT_DIR}:/data/output",
+            "-v", f"{MODELS_DIR}:/data/models",
             "xserrat/facebook-demucs:latest",
-            "-m", "demucs.separate",
+            "python3", "-m", "demucs.separate",
             "--mp3",
             "--out", "/data/output",
-            f"/data/input/{object_name}"
+            f"/data/input/{songhash}.mp3"
         ]
 
-        print("Running Demucs...")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(command, capture_output=True, text=True)
+
         print("Demucs stdout:")
         print(result.stdout)
         print("Demucs stderr:")
@@ -76,18 +99,22 @@ while True:
         if result.returncode != 0:
             raise RuntimeError(f"Demucs failed with return code {result.returncode}")
 
-        stem_name = object_name.replace(".mp3", "")
-        demucs_dir = os.path.join(output_dir, "mdx_extra_q", stem_name)
+        stems = ["bass.mp3", "drums.mp3", "vocals.mp3", "other.mp3"]
 
-        tracks = ["bass.mp3", "drums.mp3", "vocals.mp3", "other.mp3"]
+        for stem in stems:
+            local_track_path = os.path.join(
+                OUTPUT_DIR, model, songhash, stem
+            )
+            output_object_name = f"{songhash}-{stem}"
 
-        for track in tracks:
-            local_track_path = os.path.join(demucs_dir, track)
-            output_object_name = f"{songhash}-{track}"
             print(f"Uploading {local_track_path} -> output/{output_object_name}")
+            log_debug(f"Uploading output/{output_object_name}")
+
             minio_client.fput_object("output", output_object_name, local_track_path)
 
         print(f"Finished processing {songhash}")
+        log_info(f"Finished processing {songhash}")
 
     except Exception as e:
         print(f"Worker error: {e}")
+        log_info(f"Worker error for {songhash}: {e}")
