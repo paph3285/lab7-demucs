@@ -17,19 +17,33 @@ The system consists of five main components:
 
 Client
    |
+   |
+   |
    v
+   
 REST API (Flask)
    |
+   |
+   |
    v
+   
 Redis Queue (toWorker)
    |
+   |
+   |
    v
+   
 Worker (Demucs)
    |
-   v
-MinIO (output bucket)
    |
    v
+   
+MinIO (output bucket)
+   |
+   |
+   |
+   v
+   
 Client downloads tracks
 
 Logging:
