@@ -15,34 +15,20 @@ The system consists of five main components:
 
 ## Architecture Diagram
 
-Client
-   |
-   |
-   |
-   v
+Client --> 
    
-REST API (Flask)
-   |
-   |
-   |
-   v
    
-Redis Queue (toWorker)
-   |
-   |
-   |
-   v
+REST API (Flask) -->
+  
    
-Worker (Demucs)
-   |
-   |
-   v
+Redis Queue (toWorker) -->
+
    
-MinIO (output bucket)
-   |
-   |
-   |
-   v
+Worker (Demucs) -->
+
+   
+MinIO (output bucket) -->
+
    
 Client downloads tracks
 
